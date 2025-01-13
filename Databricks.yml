@@ -1,0 +1,73 @@
+name: Run Databricks Notebook
+
+on:
+  workflow_dispatch: # Trigger manually
+  push: # Trigger on code push
+    branches:
+      - main
+
+jobs:
+  run-databricks-notebook:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      # Step 3: Install necessary dependencies
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      # Step 4: Trigger Databricks notebook execution
+      - name: Run Databricks Notebook
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          import requests
+          import json
+
+          # Databricks API details
+          host = "${{ secrets.DATABRICKS_HOST }}"
+          token = "${{ secrets.DATABRICKS_TOKEN }}"
+          cluster_id = "your-cluster-id" # Replace with your Databricks Cluster ID
+          notebook_path = "/path/to/your-notebook" # Replace with your Notebook Path
+
+          # Construct API URL and headers
+          url = f"{host}/api/2.1/jobs/runs/submit"
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Content-Type": "application/json",
+          }
+
+          # Define the payload for the API request
+          payload = {
+              "run_name": "GitHub Action Triggered Run",
+              "new_cluster": {
+                  "spark_version": "10.4.x-cpu-ml-scala2.12", # Change to your cluster version
+                  "node_type_id": "i3.xlarge", # Change to your cluster node type
+                  "num_workers": 2
+              },
+              "notebook_task": {
+                  "notebook_path": notebook_path,
+                  "base_parameters": {} # Optional parameters for the notebook
+              }
+          }
+
+          # Send POST request to trigger the notebook
+          response = requests.post(url, headers=headers, data=json.dumps(payload))
+          if response.status_code == 200:
+              print("Notebook execution triggered successfully!")
+              print("Response:", response.json())
+          else:
+              print("Failed to trigger notebook execution.")
+              print("Status Code:", response.status_code)
+              print("Response:", response.text)
