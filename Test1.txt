@@ -1,0 +1,27 @@
+from pyspark.sql.functions import col
+
+# Extract the 80th row from df1 and df2
+df1_80 = df1.limit(80).tail(1)[0]  # Get 80th row as a Row object
+df2_80 = df2.limit(80).tail(1)[0]  
+
+# Convert Row objects to dictionaries
+df1_80_dict = df1_80.asDict()
+df2_80_dict = df2_80.asDict()
+
+# Merge both dictionaries (df2 values overwrite df1 values in case of overlap)
+merged_80th_row = {**df1_80_dict, **df2_80_dict}
+
+# Convert merged row into a DataFrame
+df_80_updated = spark.createDataFrame([merged_80th_row])
+
+# Create a DataFrame excluding the 80th row
+final_df_except_80 = final_df.filter(col("row_num") != 80)
+
+# Combine updated row with the rest of final_df
+final_df_updated = final_df_except_80.union(df_80_updated)
+
+# Drop the row number column (if added earlier)
+final_df_updated = final_df_updated.drop("row_num")
+
+# Show the updated DataFrame
+final_df_updated.show()
