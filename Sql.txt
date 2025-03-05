@@ -1,0 +1,32 @@
+from pyspark.sql.functions import lit
+
+# Add row numbers to identify the 80th row
+df1 = df1.withColumn("row_num", row_number().over(Window.orderBy(lit(1))))
+df2 = df2.withColumn("row_num", row_number().over(Window.orderBy(lit(1))))
+final_df = final_df.withColumn("row_num", row_number().over(Window.orderBy(lit(1))))
+
+# Register DataFrames as temporary views
+df1.createOrReplaceTempView("table1")
+df2.createOrReplaceTempView("table2")
+final_df.createOrReplaceTempView("final_table")
+
+# Generate an SQL update query dynamically for selected columns
+update_query = """
+    SELECT 
+        f.row_num, 
+        CASE WHEN f.row_num = 80 THEN t1.table1_column1 ELSE f.table1_column1 END AS table1_column1,
+        CASE WHEN f.row_num = 80 THEN t2.table2_column1 ELSE f.table2_column1 END AS table2_column1,
+        f.*
+    FROM final_table f
+    LEFT JOIN table1 t1 ON f.row_num = t1.row_num AND f.row_num = 80
+    LEFT JOIN table2 t2 ON f.row_num = t2.row_num AND f.row_num = 80
+"""
+
+# Run the update query
+final_df_updated = spark.sql(update_query)
+
+# Drop row number column
+final_df_updated = final_df_updated.drop("row_num")
+
+# Show the updated DataFrame
+final_df_updated.show(5)
