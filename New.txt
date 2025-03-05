@@ -1,12 +1,10 @@
-Here is a PySpark script to generate the two DataFrames with random data and random data types:
-
 from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 import random
-from pyspark.sql.functions import col
+from pyspark.sql.functions import lit
 
 # Initialize Spark Session
-spark = SparkSession.builder.appName("RandomDataFrames").getOrCreate()
+spark = SparkSession.builder.appName("MergeDataFrames").getOrCreate()
 
 # Function to generate random schema
 def generate_random_schema(prefix, num_cols):
@@ -50,33 +48,22 @@ data2 = [generate_random_row(schema2) for _ in range(5000)]
 df1 = spark.createDataFrame(data1, schema=schema1)
 df2 = spark.createDataFrame(data2, schema=schema2)
 
+# 1. Add missing columns to df1 (from df2)
+for col_name in df2.columns:
+    if col_name not in df1.columns:
+        df1 = df1.withColumn(col_name, lit(None))  
+
+# 2. Add missing columns to df2 (from df1)
+for col_name in df1.columns:
+    if col_name not in df2.columns:
+        df2 = df2.withColumn(col_name, lit(None))  
+
+# 3. Ensure both DataFrames have the same column order
+df2 = df2.select(df1.columns)
+
+# 4. Merge DataFrames row-wise
+final_df = df1.unionByName(df2)
+
 # Show schema and sample data
-df1.printSchema()
-df1.show(5)
-
-df2.printSchema()
-df2.show(5)
-
-Explanation:
-
-1. Random Schema Generation:
-
-The generate_random_schema function picks random data types from a predefined list for each column.
-
-
-
-2. Random Data Generation:
-
-The generate_random_row function generates random values based on the column's data type.
-
-
-
-3. Creating PySpark DataFrames:
-
-We generate 5000 rows for both DataFrames and create them using spark.createDataFrame().
-
-
-
-
-This will create two DataFrames with the required structure and random data. Let me know if you need any modifications!
-
+final_df.printSchema()
+final_df.show(5)
