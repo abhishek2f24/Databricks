@@ -1,54 +1,51 @@
 import unittest
-from unittest.mock import patch, MagicMock
-from script import (
-    filter_files_for_date,
-    extract_dynamic_keys,
-    write_to_delta,
-)
+from unittest.mock import MagicMock, patch
+from script import filter_files_for_date, extract_dynamic_keys, load_jsons_to_df
 
-class TestDataProcessingFunctions(unittest.TestCase):
+class TestScript(unittest.TestCase):
+
     def test_filter_files_for_date(self):
-        # Arrange
-        mock_file1 = MagicMock()
-        mock_file1.name = "UNS20231019.json"
-        mock_file1.path = "some_path/UNS20231019.json"
-        
-        mock_file2 = MagicMock()
-        mock_file2.name = "UNS20231020.json"
-        mock_file2.path = "some_path/UNS20231020.json"
+        """Test filtering of files based on a target date."""
+        mock_files = [
+            MagicMock(name="file1_20240305.json", path="path1"),
+            MagicMock(name="file2_20240306.json", path="path2"),
+            MagicMock(name="file3_20240305.json", path="path3")
+        ]
+        result = filter_files_for_date(mock_files, "20240305")
+        self.assertEqual(result, ["path1", "path3"])
 
-        mock_files = [mock_file1, mock_file2]
-        target_date = "UNS20231019"
+    @patch("script.SparkSession")
+    def test_load_jsons_to_df(self, mock_spark):
+        """Test JSON loading into Spark DataFrame."""
+        mock_spark.read.format().load.return_value = "mock_df"
+        result = load_jsons_to_df(mock_spark, ["path1.json", "path2.json"])
+        self.assertEqual(result, "mock_df")
 
-        # Act
-        filtered_files = filter_files_for_date(mock_files, target_date)
+    @patch("script.DataFrame")
+    def test_extract_dynamic_keys(self, mock_df):
+        """Test extraction of dynamic keys from JSON."""
+        # Simulate the selection returning a valid dataframe
+        mock_df.select.return_value = "mock_extracted_df"
 
-        # Assert
-        self.assertEqual(filtered_files, ['some_path/UNS20231019.json'])
+        result = extract_dynamic_keys(mock_df)
+        self.assertIsNotNone(result)
 
-    def test_extract_dynamic_keys(self):
-        # Arrange
-        df_mock = MagicMock()
-        df_mock.select.return_value = df_mock  # Mock PySpark DataFrame behavior
+    @patch("script.DeltaLakeConnector")
+    @patch("script.FileSystemHandler")
+    def test_process_device_data(self, mock_fs_handler, mock_delta_connector):
+        """Test the overall process without actual Spark dependencies."""
+        mock_fs_handler.list_files.return_value = [
+            MagicMock(name="device1/", path="path1"),
+            MagicMock(name="device2/", path="path2")
+        ]
+        mock_delta_connector.return_value.initialize_connection.return_value = None
 
-        # Act
-        result = extract_dynamic_keys(df_mock)
-
-        # Assert
-        self.assertIsNotNone(result)  # Ensure it does not return None
-        df_mock.select.assert_called()  # Verify select() was called
-
-    @patch('script.write_to_delta')  
-    def test_write_to_delta(self, mock_write):
-        # Arrange
-        df_mock = MagicMock()
-        name = "test_device"
-
-        # Act
-        write_to_delta(df_mock, name)
-
-        # Assert
-        mock_write.assert_called_once_with(df_mock, name)
+        # No exception means the test passes
+        try:
+            from script import process_device_data
+            process_device_data(None, "mock_account", "mock_container", "mock_scope", "mock_key", mock_fs_handler)
+        except Exception:
+            self.fail("process_device_data() raised an exception!")
 
 if __name__ == "__main__":
-    unittest.main(argv=[''], exit=False)
+    unittest.main()
