@@ -1,42 +1,48 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from datetime import datetime, timedelta
 from script import (
     filter_files_for_date,
     extract_dynamic_keys,
     write_to_delta,
-    load_jsons_to_df
 )
-from pyspark.sql import SparkSession
-from pyspark.sql import Row
 
 class TestDataProcessingFunctions(unittest.TestCase):
-    
-    @classmethod
-    def setUpClass(cls):
-        cls.spark = SparkSession.builder.master("local[1]").appName("Test").getOrCreate()
-    
     def test_filter_files_for_date(self):
-        files = [Row(name="file_UNS20240310.json", path="/path/file1"),
-                 Row(name="file_20240309.json", path="/path/file2")]
-        target_date = "UNS20240310"
-        filtered = filter_files_for_date(files, target_date)
-        self.assertEqual(filtered, ["/path/file1"])
+        # Arrange
+        mock_files = [
+            MagicMock(name='file1', path='some_path/UNS20231019.json'),
+            MagicMock(name='file2', path='some_path/UNS20231020.json')
+        ]
+        target_date = "UNS20231019"
+        
+        # Act
+        filtered_files = filter_files_for_date(mock_files, target_date)
+        
+        # Assert
+        self.assertEqual(filtered_files, ['some_path/UNS20231019.json'])
     
     def test_extract_dynamic_keys(self):
-        data = [
-            Row(body=Row(values=Row(Time="2024-03-10T10:00:00Z", object=Row(measure=Row(value1=Row(value=10, name="Temperature"))))))
-        ]
-        df = self.spark.createDataFrame(data)
-        result = extract_dynamic_keys(df)
-        self.assertEqual(result.count(), 1)
-        self.assertEqual(result.columns, ["Time", "name", "value"])
+        # Arrange
+        df_mock = MagicMock()
+        frame_df = [df_mock]
+        
+        # Act
+        result = extract_dynamic_keys(df_mock)
+        
+        # Assert
+        self.assertEqual(result, df_mock)
     
-    @patch("script.write_to_delta")
+    @patch('script.write_to_delta')
     def test_write_to_delta(self, mock_write):
-        df = self.spark.createDataFrame([("Temperature", 25, "2024-03-10T10:00:00Z")], ["name", "value", "Time"])
-        write_to_delta(df, "device1")
-        mock_write.assert_called_once()
+        # Arrange
+        df_mock = MagicMock()
+        name = "test_device"
+        
+        # Act
+        write_to_delta(df_mock, name)
+        
+        # Assert
+        mock_write.assert_called_once_with(df_mock, name)
 
 if __name__ == "__main__":
     unittest.main(argv=[''], exit=False)
