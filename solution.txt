@@ -9,46 +9,44 @@ from script import (
 class TestDataProcessingFunctions(unittest.TestCase):
     def test_filter_files_for_date(self):
         # Arrange
-        mock_files = [
-            MagicMock(name="file1"),
-            MagicMock(name="file2"),
-        ]
-        mock_files[0].name = "UNS20231019.json"
-        mock_files[0].path = "some_path/UNS20231019.json"
-        mock_files[1].name = "UNS20231020.json"
-        mock_files[1].path = "some_path/UNS20231020.json"
-
-        target_date = "UNS20231019"
+        mock_file1 = MagicMock()
+        mock_file1.name = "UNS20231019.json"
+        mock_file1.path = "some_path/UNS20231019.json"
         
+        mock_file2 = MagicMock()
+        mock_file2.name = "UNS20231020.json"
+        mock_file2.path = "some_path/UNS20231020.json"
+
+        mock_files = [mock_file1, mock_file2]
+        target_date = "UNS20231019"
+
         # Act
         filtered_files = filter_files_for_date(mock_files, target_date)
-        
+
         # Assert
         self.assertEqual(filtered_files, ['some_path/UNS20231019.json'])
-    
+
     def test_extract_dynamic_keys(self):
         # Arrange
         df_mock = MagicMock()
-        
-        # Mock select behavior
-        df_mock.select.return_value = df_mock  # Simulate PySpark's select method returning a DataFrame
+        df_mock.select.return_value = df_mock  # Mock PySpark DataFrame behavior
 
         # Act
         result = extract_dynamic_keys(df_mock)
-        
+
         # Assert
-        self.assertIsNotNone(result)  # Ensure it returns a value
-        df_mock.select.assert_called()  # Check if select was called
-    
-    @patch('script.write_to_delta')
+        self.assertIsNotNone(result)  # Ensure it does not return None
+        df_mock.select.assert_called()  # Verify select() was called
+
+    @patch('script.write_to_delta')  
     def test_write_to_delta(self, mock_write):
         # Arrange
         df_mock = MagicMock()
         name = "test_device"
-        
+
         # Act
         write_to_delta(df_mock, name)
-        
+
         # Assert
         mock_write.assert_called_once_with(df_mock, name)
 
