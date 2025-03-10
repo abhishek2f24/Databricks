@@ -46,3 +46,11 @@ class TestDataProcessingFunctions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(argv=[''], exit=False)
+
+
+FAILED test_dailyiotarchival.py::TestDataProcessingFunctions::test_extract_dynamic_keys - AssertionError: <pyspark.sql.dataf
+rame.DataFrame object at 0x00000200F4E83880> != <MagicMock id='2203131399376'>
+FAILED test_dailyiotarchival.py::TestDataProcessingFunctions::test_filter_files_for_date - AssertionError: Lists differ: []
+!= ['some_path/UNS20231019.json']
+FAILED test_dailyiotarchival.py::TestDataProcessingFunctions::test_write_to_delta - AssertionError: Expected 'write_to_delta
+' to be called once. Called 0 times.
