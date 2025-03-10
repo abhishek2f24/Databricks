@@ -1,0 +1,109 @@
+# test_script.py
+
+import unittest
+from unittest.mock import patch, MagicMock
+from script_datarchival import (
+    initialize_delta_lake_connection,
+    get_device_list,
+    filter_files_for_date,
+    load_jsons_to_df,
+    extract_dynamic_keys,
+    write_to_delta,
+)
+
+class TestDataProcessingFunctions(unittest.TestCase):
+
+    @patch('dbutils.secrets.get')
+    @patch('pyspark.sql.SparkSession.conf.set')
+    def test_initialize_delta_lake_connection(self, mock_conf_set, mock_get):
+        # Arrange
+        mock_get.return_value = "dummy_service_credential"
+        storage_account = "test_storage"
+        secret_scope = "test_scope"
+        secret_key = "test_key"
+        
+        # Act
+        initialize_delta_lake_connection(storage_account, secret_scope, secret_key)
+        
+        # Assert
+        self.assertEqual(mock_conf_set.call_count, 5)  # Expecting five configuration methods to be called
+    
+    @patch('dbutils.fs.ls')  # Use full path for dbutils
+    def test_get_device_list(self, mock_dbutils):
+        # Arrange
+        mock_ls = MagicMock()  # Create a mock for the ls method
+        mock_dbutils.fs = MagicMock()  # Create a mock for dbutils.fs
+        mock_dbutils.fs.ls = mock_ls  # Assign the mock ls to the dbutils.fs
+        mock_ls.return_value = [MagicMock(name='device1'), MagicMock(name='device2')]
+        
+        storage_account = "test_storage"
+        container = "test_container"
+        
+        # Act
+        devices = get_device_list(storage_account, container)
+        
+        # Assert
+        self.assertEqual(len(devices), 2)
+
+    @patch('dbutils.fs.ls')
+    def test_filter_files_for_date(self, mock_ls):
+        # Arrange
+        mock_ls.return_value = [
+            MagicMock(name='file1', path='some_path/UNS20231019.json'),
+            MagicMock(name='file2', path='some_path/UNS20231020.json')
+        ]
+        target_date = "UNS20231019"
+        
+        # Act
+        filtered_files = filter_files_for_date(mock_ls('some_path'), target_date)
+        
+        # Assert
+        self.assertEqual(filtered_files, ['some_path/UNS20231019.json'])
+
+    @patch('pyspark.sql.SparkSession.read.format')
+    def test_load_jsons_to_df(self, mock_read_format):
+        # Arrange
+        mock_df = MagicMock()
+        mock_read_format.return_value.load.return_value = mock_df
+        file_paths = ['path1', 'path2']
+        
+        # Act
+        result = load_jsons_to_df(file_paths)
+
+        # Assert
+        self.assertEqual(result, mock_df)
+
+    @patch('functools.reduce')
+    def test_extract_dynamic_keys(self, mock_reduce):
+        # Given
+        df_mock = MagicMock()
+        frame_df = [df_mock]
+        mock_reduce.return_value = df_mock
+
+        # Act
+        result = extract_dynamic_keys(df_mock)
+
+        # Assert
+        self.assertEqual(result, df_mock)
+
+    @patch('pyspark.sql.dataframe.DataFrame.write')
+    def test_write_to_delta(self, mock_write):
+        # Arrange
+        df_mock = MagicMock()
+        mock_write.return_value = df_mock
+        
+        name = "test_device"
+        
+        # Act
+        write_to_delta(df_mock, name)
+        
+        # Assert
+        df_mock.write.format.assert_called_once_with("delta")
+        df_mock.write.format.return_value.mode.assert_called_once_with("overwrite")
+        df_mock.write.format.return_value.mode.return_value.option.assert_called_once_with("header", "true")
+        df_mock.write.format.return_value.mode.return_value.option.return_value.save.assert_called_once_with(
+            f"abfss://iot-nor@stadlk2srciasp.dfs.core.windows.net/CURATED/iot-platform/{name}/OUT/{name}_Basic"
+        )
+
+if __name__ == "__main__":
+    unittest.main(argv=[''], exit=False)
