@@ -1,33 +1,46 @@
-# script.py
-
-from pyspark.sql import DataFrame
+from pyspark.sql import SparkSession, DataFrame
 from datetime import datetime, timedelta
 import functools
 
-def initialize_delta_lake_connection(storage_account: str, secret_scope: str, secret_key: str):
-    """
-    Initialize the Delta Lake connection with Azure Blob Storage using OAuth.
-    """
-    service_credential = dbutils.secrets.get(scope=secret_scope, key=secret_key)
-    spark.conf.set(f"fs.azure.account.auth.type.{storage_account}.dfs.core.windows.net", "OAuth")
-    spark.conf.set(f"fs.azure.account.oauth.provider.type.{storage_account}.dfs.core.windows.net", 
-                   "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider")
-    spark.conf.set(f"fs.azure.account.oauth2.client.id.{storage_account}.dfs.core.windows.net", 
-                   "3727b46c-ae93-4c25-816a-f24e7fd92631")  # Replace this with your actual client ID
-    spark.conf.set(f"fs.azure.account.oauth2.client.secret.{storage_account}.dfs.core.windows.net", service_credential)
-    spark.conf.set(f"fs.azure.account.oauth2.client.endpoint.{storage_account}.dfs.core.windows.net", 
-                   "https://login.microsoftonline.com/329e91b0-e21f-48fb-a071-456717ecc28e/oauth2/token")
+class DeltaLakeConnector:
+    """Handles connection to Azure Delta Lake."""
+    def __init__(self, storage_account: str, secret_scope: str, secret_key: str, dbutils):
+        self.storage_account = storage_account
+        self.secret_scope = secret_scope
+        self.secret_key = secret_key
+        self.dbutils = dbutils
 
-def get_device_list(storage_account: str, container: str):
-    return dbutils.fs.ls(f"abfss://{container}@{storage_account}.dfs.core.windows.net/RAW/iot-platform/")
+    def initialize_connection(self, spark: SparkSession):
+        """Set up Azure authentication for Delta Lake access."""
+        service_credential = self.dbutils.secrets.get(scope=self.secret_scope, key=self.secret_key)
+        spark.conf.set(f"fs.azure.account.auth.type.{self.storage_account}.dfs.core.windows.net", "OAuth")
+        spark.conf.set(f"fs.azure.account.oauth.provider.type.{self.storage_account}.dfs.core.windows.net", 
+                       "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider")
+        spark.conf.set(f"fs.azure.account.oauth2.client.id.{self.storage_account}.dfs.core.windows.net", 
+                       "3727b46c-ae93-4c25-816a-f24e7fd92631")  # Replace with actual client ID
+        spark.conf.set(f"fs.azure.account.oauth2.client.secret.{self.storage_account}.dfs.core.windows.net", service_credential)
+        spark.conf.set(f"fs.azure.account.oauth2.client.endpoint.{self.storage_account}.dfs.core.windows.net", 
+                       "https://login.microsoftonline.com/329e91b0-e21f-48fb-a071-456717ecc28e/oauth2/token")
+
+class FileSystemHandler:
+    """Handles file system operations, making it easier to mock."""
+    def __init__(self, dbutils):
+        self.dbutils = dbutils
+
+    def list_files(self, path: str):
+        """Lists files in the given path."""
+        return self.dbutils.fs.ls(path)
 
 def filter_files_for_date(device_files, target_date: str):
+    """Filters files that match the given target date."""
     return [file.path for file in device_files if target_date in file.name]
 
-def load_jsons_to_df(file_paths):
+def load_jsons_to_df(spark: SparkSession, file_paths):
+    """Loads JSON files into a Spark DataFrame."""
     return spark.read.format("json").load(file_paths)
 
 def extract_dynamic_keys(df):
+    """Extracts specific dynamic keys from JSON data."""
     frame_df = []
     for i in range(1, 12):
         value_fields = f"body.values.object.measure.value{i}.value"
@@ -42,32 +55,36 @@ def extract_dynamic_keys(df):
     return functools.reduce(DataFrame.union, frame_df) if frame_df else None
 
 def write_to_delta(df_long, name: str):
+    """Writes processed DataFrame to Delta Lake."""
     df_long.write.format("delta").mode("overwrite").option("header", "true").save(
         f"abfss://iot-nor@stadlk2srciasp.dfs.core.windows.net/CURATED/iot-platform/{name}/OUT/{name}_Basic"
     )
 
-def process_device_data(storage_account: str, container: str, secret_scope: str, secret_key: str):
-    initialize_delta_lake_connection(storage_account, secret_scope, secret_key)
+def process_device_data(spark: SparkSession, storage_account: str, container: str, secret_scope: str, secret_key: str, dbutils):
+    """Main function to process device data and write results to Delta Lake."""
+    delta_connector = DeltaLakeConnector(storage_account, secret_scope, secret_key, dbutils)
+    delta_connector.initialize_connection(spark)
+
+    fs_handler = FileSystemHandler(dbutils)
 
     date = "UNS" + (datetime.today() - timedelta(1)).strftime("%Y%m%d")
     month = datetime.today().strftime("%Y%m")
     
-    device_list = get_device_list(storage_account, container)
+    device_list = fs_handler.list_files(f"abfss://{container}@{storage_account}.dfs.core.windows.net/RAW/iot-platform/")
 
     for device in device_list:
         try:
-            all_files = dbutils.fs.ls(f"abfss://{container}@{storage_account}.dfs.core.windows.net/RAW/iot-platform/{device.name}IN/{month}/")
+            all_files = fs_handler.list_files(f"abfss://{container}@{storage_account}.dfs.core.windows.net/RAW/iot-platform/{device.name}IN/{month}/")
             filtered_files = filter_files_for_date(all_files, date)
 
             if filtered_files:
-                df = load_jsons_to_df(filtered_files)
+                df = load_jsons_to_df(spark, filtered_files)
                 df_long = extract_dynamic_keys(df)
 
                 if df_long is not None:
                     df_long = df_long.na.drop()
-                    name = device.name[:-1]  # Remove the last character for the device name
+                    name = device.name[:-1]  # Remove last character for the device name
                     write_to_delta(df_long, name)
 
         except Exception as e:
             print(f"Error processing device {device.name}: {e}")
-
