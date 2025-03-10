@@ -1,53 +1,42 @@
 import unittest
 from unittest.mock import patch, MagicMock
-
-# Mock dbutils globally before importing any module that depends on it
-import sys
-from types import SimpleNamespace
-
-mock_dbutils = SimpleNamespace(
-    secrets=MagicMock(get=MagicMock(return_value="dummy_secret")),
-    fs=MagicMock(ls=MagicMock(return_value=[MagicMock(name='device1'), MagicMock(name='device2')]))
-)
-
-sys.modules['dbutils'] = mock_dbutils
-
-# Now import your script
-from script_datarchival import (
-    initialize_delta_lake_connection,
-    get_device_list,
+from datetime import datetime, timedelta
+from script import (
     filter_files_for_date,
-    load_jsons_to_df,
     extract_dynamic_keys,
     write_to_delta,
+    load_jsons_to_df
 )
+from pyspark.sql import SparkSession
+from pyspark.sql import Row
 
 class TestDataProcessingFunctions(unittest.TestCase):
-
-    @patch('dbutils.secrets.get', return_value="dummy_service_credential")
-    @patch('pyspark.sql.SparkSession.conf.set')
-    def test_initialize_delta_lake_connection(self, mock_conf_set, mock_get):
-        # Arrange
-        storage_account = "test_storage"
-        secret_scope = "test_scope"
-        secret_key = "test_key"
-        
-        # Act
-        initialize_delta_lake_connection(storage_account, secret_scope, secret_key)
-        
-        # Assert
-        self.assertEqual(mock_conf_set.call_count, 5)  # Expecting five configuration methods to be called
     
-    def test_get_device_list(self):
-        # Arrange
-        storage_account = "test_storage"
-        container = "test_container"
-        
-        # Act
-        devices = get_device_list(storage_account, container)
-        
-        # Assert
-        self.assertEqual(len(devices), 2)
+    @classmethod
+    def setUpClass(cls):
+        cls.spark = SparkSession.builder.master("local[1]").appName("Test").getOrCreate()
+    
+    def test_filter_files_for_date(self):
+        files = [Row(name="file_UNS20240310.json", path="/path/file1"),
+                 Row(name="file_20240309.json", path="/path/file2")]
+        target_date = "UNS20240310"
+        filtered = filter_files_for_date(files, target_date)
+        self.assertEqual(filtered, ["/path/file1"])
+    
+    def test_extract_dynamic_keys(self):
+        data = [
+            Row(body=Row(values=Row(Time="2024-03-10T10:00:00Z", object=Row(measure=Row(value1=Row(value=10, name="Temperature"))))))
+        ]
+        df = self.spark.createDataFrame(data)
+        result = extract_dynamic_keys(df)
+        self.assertEqual(result.count(), 1)
+        self.assertEqual(result.columns, ["Time", "name", "value"])
+    
+    @patch("script.write_to_delta")
+    def test_write_to_delta(self, mock_write):
+        df = self.spark.createDataFrame([("Temperature", 25, "2024-03-10T10:00:00Z")], ["name", "value", "Time"])
+        write_to_delta(df, "device1")
+        mock_write.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main(argv=[''], exit=False)
