@@ -1,0 +1,244 @@
+from azure.cosmos import CosmosClient
+import json
+import os
+from azure.identity         import ManagedIdentityCredential, DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+import logging
+import pandas as pd
+from sqlalchemy             import create_engine, event
+import struct
+import urllib 
+import pyspark.pandas as ps
+from datetime import timedelta, date
+from delta import DeltaTable
+
+"""
+*******************************************************************************
+Function to get value of key from environment variable
+*******************************************************************************
+"""
+def get_key_value(id):
+    return "https://azr-kv-iasp-wetsprepnor.vault.azure.net/"
+
+"""
+*******************************************************************************
+ Purpose: Retrieves the database secret from  Azure Key Vault
+*******************************************************************************
+"""
+def get_secret(secret):
+    credential = ManagedIdentityCredential()
+    secret_client = SecretClient(
+        vault_url=get_key_value('tsprep_key_vault_url'), 
+        credential=credential
+    )
+    return secret_client.get_secret(secret).value
+
+"""
+*******************************************************************************
+ Purpose: Get Cosmos Client using AAD authentication
+*******************************************************************************
+"""
+def get_storage():
+    logging.info("Inside get_storage function")
+    storage_name=get_secret("StorageName")
+    storage_container=get_secret("ContainerName")
+    return storage_name,storage_container
+
+
+def get_cosmos_client():
+    logging.info("Inside get_cosmos_client function") 
+    conn_str = get_secret("CosmosDBConnStr")
+    client = CosmosClient.from_connection_string(conn_str)
+    logging.info("client aquired")
+    return client
+
+def get_cosmos_containers(cosmos_client):
+    logging.info("Inside get_cosmos_containers function")
+    database_name = get_secret("CosmosDatabase")
+    raw_container_name = get_secret("CosmosRawContainer")
+    clean_container_name = get_secret("CosmosCleanContainer")
+    logging.info("clean_container_name")
+    database = cosmos_client.get_database_client(database_name)
+    raw_container = database.get_container_client(raw_container_name)
+    clean_container = database.get_container_client(clean_container_name)
+    logging.info("Inside clean_containers function")
+    return raw_container, clean_container
+
+
+def fetchdb(clean_contain,tag_name,from_time, to_time):
+    tag=tag_name
+    clean_container=clean_contain
+    results = []   
+    
+    results = list(clean_container.query_items(
+        query="SELECT c.TagId, c.Timestamp, c['Value'] FROM c WHERE c.TagId=@tagid and c.Timestamp>@from_time and c.Timestamp<=@to_time",
+        parameters=[
+            {"name": "@tagid", "value": tag},
+            {"name": "@from_time", "value": from_time},
+            {"name": "@to_time", "value": to_time}
+        ],
+        enable_cross_partition_query=True
+    ))
+    # results.extend(result)
+    return results
+
+def query(clean_container,tag_name, from_time, to_time):
+    #create connection with COSMOSDB
+    cosmos_result =  fetchdb(clean_container,tag_name,from_time, to_time)
+    df=[]
+    if cosmos_result:
+        df=spark.createDataFrame(cosmos_result)
+        return df
+ 
+def fetchrules(get_engine):
+    tag_rule_query="Select tagName, tag_rule,sequence,updatedBy,createdDate, lastUpdatedDate, condition,value, cleansingMethod, cleansingQualifier  from CleansingRuleConfig as c full outer join CleansingRuleDetail as d on c.CleansingRuleConfigId = d.CleansingRuleConfigId"
+    return pd.read_sql_query(tag_rule_query, get_engine)
+def getCleansingDbConnString():
+    print('Entered into get_dbinfoinitialise method')
+    clconnectionstring = get_secret("PiSQLOdbcConnStr")
+    return clconnectionstring
+def getConnection(db_connection_str):   
+    print("Inside getConnection method") 
+    
+    SQL_COPT_SS_ACCESS_TOKEN = 1256  # Connection option for access tokens, as defined in msodbcsql.h
+    TOKEN_URL = "https://database.windows.net/.default"  # The token URL for any Azure SQL database
+    
+    engine = create_engine(db_connection_str)
+    azure_credentials = ManagedIdentityCredential()
+
+    @event.listens_for(engine, "do_connect")
+    def provide_token(dialect, conn_rec, cargs, cparams):
+        # remove the "Trusted_Connection" parameter that SQLAlchemy adds
+        cargs[0] = cargs[0].replace(";Trusted_Connection=Yes", "")
+        # create token credential
+        raw_token = azure_credentials.get_token(TOKEN_URL).token.encode("utf-16-le")
+        token_struct = struct.pack(f"<I{len(raw_token)}s", len(raw_token), raw_token)
+        # apply it to keyword arguments
+        cparams["attrs_before"] = {SQL_COPT_SS_ACCESS_TOKEN: token_struct}
+
+    logging.info("Connected to database ")
+    return engine
+
+def tags_query():
+    db_connection_str = getCleansingDbConnString()
+    print(db_connection_str)
+   
+    
+
+    db_engine = getConnection("mssql+pyodbc://@azr-sql-iasp-weu-tsprep-configstorenor.database.windows.net:1433/azr-sqldb-iasp-weu-tsprep-configstorenor-prd?driver=ODBC Driver 18 for SQL Server")
+    query_result=[]
+    query_result = fetchrules(db_engine)
+    return query_result
+
+def read_data_frame_from_sql2():
+    username = dbutils.secrets.get(scope="databrickScopePrd",key="sqlUsername")
+    sql_pass = dbutils.secrets.get(scope="databrickScopePrd",key="sqlPassword")
+    datasource_config = (spark.read
+        .format("jdbc")
+        .option("url", f"jdbc:sqlserver://azr-sql-iasp-weu-tsprep-configstorenor.database.windows.net:1433;database=azr-sqldb-iasp-weu-tsprep-configstorenor-prd;user=r4sqladmin@azr-sql-tsprep-we-dev;password=r4sqlSrvr;encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;")
+        .option("dbtable", "Select tagName, tag_rule,sequence,updatedBy,createdDate, lastUpdatedDate, condition,value, cleansingMethod, cleansingQualifier  from CleansingRuleConfig as c full outer join CleansingRuleDetail as d on c.CleansingRuleConfigId = d.CleansingRuleConfigId")
+        .option("user", username)
+        .option("password", sql_pass)
+        .load()
+        )
+    return datasource_config
+
+sql_server="azr-sql-iasp-weu-tsprep-configstorenor"
+sql_db="azr-sqldb-iasp-weu-tsprep-configstorenor-prd"
+
+def read_data_frame_from_sql(sql_query):
+    username = dbutils.secrets.get(scope="databrickScopePrd",key="sqlUsername")
+    sql_pass = dbutils.secrets.get(scope="databrickScopePrd",key="sqlPassword")
+    datasource_config = (spark.read
+        .format("jdbc")
+        .option("url", f"jdbc:sqlserver://{sql_server}.database.windows.net:1433;database={sql_db};user={username}@{sql_db};password={sql_pass};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;")
+        .option("dbtable", sql_query)
+        .option("user", username)
+        .option("password", sql_pass)
+        .load()
+        )
+    return datasource_config
+
+def get_databasesettings():
+    db_settings = {}
+    querycolumns        = "dataCleansingDataSourceId, adoConnStr, odbcConnStr, DatasourceTableName, CleanDataTableName, DataCharacteristic, Representation, IdCol, TimeCol, ValueCol, pitocloud"
+    querystring         = "(select columns from dataCleansingDataSource) as datasource_config"
+    querystring         = querystring.replace("columns", querycolumns)
+    datasource_config   = read_data_frame_from_sql(querystring)
+    # Curate the collected data into a dictionary & store vault into a global variable
+    # db_settings["sourceconfig"] = datasource_config.toPandas()
+    return db_settings
+
+def get_cleansingrules ():
+
+    querystring = "(Select tagName, tag_rule from CleansingRuleConfig) as tagconfig"
+    tagconfig = read_data_frame_from_sql(querystring)
+    # tagconfig=tagconfig.toPandas()
+    
+    # querystring = "(Select RuleId, CleansingRuleConfigId, Sequence, EvaluateInfluencingTag, InfluencingTag, Condition, Value, CleansingMethod, CleansingQualifier from CleansingRuleDetail) as ruledetail"
+    # ruledetail  = read_data_frame_from_sql(querystring)
+    # ruledetail=ruledetail.toPandas()
+    # rules = pd.merge(tagconfig, ruledetail, on='CleansingRuleConfigId', how='outer')
+    # rules.drop(['CleansingRuleConfigId', 'RuleId'], axis = 1, inplace=True)
+    return tagconfig
+
+def initial_deltalake_connection():
+    storage_account="stpdlk2srciasp"
+    service_credential = dbutils.secrets.get(scope="databrickScopePrd",key="stpdlk2srciasp-secret")
+    spark.conf.set(f"fs.azure.account.auth.type.{storage_account}.dfs.core.windows.net", "OAuth")
+    spark.conf.set(f"fs.azure.account.oauth.provider.type.{storage_account}.dfs.core.windows.net", "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider")
+    spark.conf.set(f"fs.azure.account.oauth2.client.id.{storage_account}.dfs.core.windows.net", "be485108-7e80-42b0-af4f-cfa98b32254a")
+    spark.conf.set(f"fs.azure.account.oauth2.client.secret.{storage_account}.dfs.core.windows.net", service_credential)
+    spark.conf.set(f"fs.azure.account.oauth2.client.endpoint.{storage_account}.dfs.core.windows.net", "https://login.microsoftonline.com/329e91b0-e21f-48fb-a071-456717ecc28e/oauth2/token")
+
+
+
+def get_date_range(days_back=1):
+    """Get the date range from today to a specified number of days back."""
+    to_date = date.today()
+    from_date = to_date - timedelta(days=days_back)
+    return str(from_date), str(to_date)
+
+def fetch_cleansing_rules():
+    """Fetch cleansing rules from the source."""
+    return get_cleansingrules()
+
+def fetch_cosmos_client():
+    """Get the Cosmos client."""
+    return get_cosmos_client()
+
+def fetch_clean_container(cosmosclient):
+    """Fetch the clean container."""
+    return get_cosmos_containers(cosmosclient)[1]
+
+def process_rule(clean_container, tag_rule, tag_name, from_date, to_date):
+    """Process a single cleansing rule and write to Delta Lake."""
+    source = query(clean_container, tag_rule, from_date, to_date)
+
+    if source:
+        try:
+            write_to_delta(source, tag_name, tag_rule, from_date, to_date)
+        except Exception as e:
+            logging.error(f"Error while writing to Delta: {e}")
+
+def write_to_delta(source, tag_name, tag_rule, from_date, to_date):
+    """Write the source DataFrame to Delta Lake."""
+    initial_deltalake_connection()
+    source.repartition(1).write.format("delta").mode("overwrite") \
+         .option("header", "true") \
+         .option("replaceWhere", f"Timestamp >= '{from_date}' AND Timestamp <= '{to_date}'") \
+         .save(f"abfss://pi-da-rc-fr-nor@stpdlk2srciasp.dfs.core.windows.net/CURATED/ARCHIVE/{tag_name}/OUT/{tag_rule}")
+
+def main():
+    """Main execution function."""
+    from_date, to_date = get_date_range()
+    rules_df = fetch_cleansing_rules()
+    cosmosclient = fetch_cosmos_client()
+    clean_container = fetch_clean_container(cosmosclient)
+
+    for row in rules_df.collect():
+        process_rule(clean_container, row['tag_rule'], row['tagName'], from_date, to_date)
+
+if __name__ == "__main__":
+    main()
+
