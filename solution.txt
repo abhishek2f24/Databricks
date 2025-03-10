@@ -4,15 +4,20 @@ from script import filter_files_for_date, extract_dynamic_keys, load_jsons_to_df
 
 class TestScript(unittest.TestCase):
 
-    def test_filter_files_for_date(self):
-        """Test filtering of files based on a target date."""
-        mock_files = [
-            MagicMock(name="file1_20240305.json", path="path1"),
-            MagicMock(name="file2_20240306.json", path="path2"),
-            MagicMock(name="file3_20240305.json", path="path3")
+def test_filter_files_for_date(self):
+        # Mock file list returned by dbutils.fs.ls()
+        mock_device_files = [
+            MagicMock(name="FileInfo", name="device_20240308.json", path="path1"),
+            MagicMock(name="FileInfo", name="device_20240308.log", path="path2"),
+            MagicMock(name="FileInfo", name="device_20240308.txt", path="path3"),
+            MagicMock(name="FileInfo", name="device_20240307.json", path="path4"),  # Should be filtered out
         ]
-        result = filter_files_for_date(mock_files, "20240305")
-        self.assertEqual(result, ["path1", "path3"])
+
+        target_date = "20240308"
+        expected_paths = ["path1", "path2", "path3"]
+
+        result = filter_files_for_date(mock_device_files, target_date)
+        self.assertEqual(result, expected_paths)
 
     @patch("script.SparkSession")
     def test_load_jsons_to_df(self, mock_spark):
